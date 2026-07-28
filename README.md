@@ -73,11 +73,11 @@ Google Gemini・OpenAI・Anthropic などの AI API を使ってウェブペー�
 
 ### Overview
 
-A Chrome extension that translates web pages in place using AI APIs — Google Gemini, OpenAI, Anthropic, or any OpenAI-compatible endpoint. Supports 21 languages while preserving page structure, links, and formatting.
+A Chrome extension that translates web pages in place using AI APIs — Google Gemini, OpenAI, Anthropic, Qwen DashScope, or any OpenAI-compatible endpoint. Supports 21 languages while preserving page structure, links, and formatting.
 
 ### Features
 
-- **4 AI providers** — Gemini, OpenAI, Anthropic, and OpenAI-compatible endpoints
+- **5 AI providers** — Gemini, OpenAI, Anthropic, Qwen DashScope, and OpenAI-compatible endpoints
 - **21 target languages** — English, Japanese, Chinese, Korean, Arabic, Russian, and more
 - **Structure-preserving** — keeps links, bold text, headings, and layout intact
 - **Batch processing & concurrency** — translates large pages quickly
@@ -112,6 +112,7 @@ Click **Add to Chrome** on the [Chrome Web Store page](https://chromewebstore.go
 | Google Gemini | `gemini-3.1-flash-lite` |
 | OpenAI | `gpt-5.4-nano-2026-03-17` |
 | Anthropic | `claude-haiku-4-5-20251001` |
+| Qwen DashScope | `qwen-mt-plus` |
 | OpenAI Compatible | Any model |
 
 ### Supported Target Languages
@@ -127,6 +128,20 @@ English / Japanese / Chinese (Simplified & Traditional) / Korean / Spanish / Fre
 | Concurrency limit | 10 | Maximum simultaneous requests |
 | API timeout | 180 s | Request timeout |
 | Max retries | 3 | Retry attempts on error |
+
+### Fork Improvements
+
+This fork adds the following improvements:
+
+- **Qwen DashScope support** with Mainland China, International, and Custom service regions
+- Automatic Qwen endpoint construction for `/compatible-mode/v1/chat/completions`
+- Qwen-MT compatible `translation_options` and the 32,768-token provider limit
+- Per-unit Qwen translation so progress advances while a batch is being processed
+- Better support for React and Mastodon-style single-page applications, including dynamic text mounting
+- DOM fallback handling when text-only in-place updates cannot be applied
+- Visible progress and optional debug logging in the page and service-worker consoles
+- Safe handling when Chrome invalidates an extension context during reloads or updates
+- A setting to manually translate previously translated sites instead of translating them automatically on reload
 
 ---
 

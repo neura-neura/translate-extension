@@ -27,6 +27,7 @@ const DEFAULTS = Object.freeze({
     geminiModel: 'gemini-3.1-flash-lite',
     openaiModel: 'gpt-5.4-nano-2026-03-17',
     anthropicModel: 'claude-haiku-4-5-20251001',
+    qwenModel: 'qwen-mt-plus',
     compatibleModel: '',
     batchSize: 500,
     maxBatchLength: 65535,
@@ -55,6 +56,12 @@ const tabStates = new Map();
 const globalRequestQueue = new Map();
 let isProcessing = false;
 const activeTranslationTabs = new Set();
+
+function debugLog(...args) {
+    chrome.storage.local.get(['debugLogging'], ({ debugLogging }) => {
+        if (debugLogging === true) console.debug('[AI Translator]', ...args);
+    });
+}
 
 function getTabState(tabId) {
     if (!tabStates.has(tabId)) {
@@ -507,6 +514,7 @@ async function translateTextBatch(fragmentBatch, signal) {
     const langCode = (targetLanguage || 'en').trim();
     const langEntry = LANGUAGE_LIST.find(l => l.code === langCode);
     const langName = langEntry ? langEntry.name : 'English';
+    debugLog('Starting batch', { provider, units: fragmentBatch.length, targetLanguage: langName });
 
     let translatedJSONString;
     if (provider === 'openai') {
@@ -515,6 +523,8 @@ async function translateTextBatch(fragmentBatch, signal) {
         translatedJSONString = await translateWithAnthropic(jsonText, retryLimit, signal, langName);
     } else if (provider === 'openai-compatible') {
         translatedJSONString = await translateWithOpenAICompatible(jsonText, retryLimit, signal, langName);
+    } else if (provider === 'qwen') {
+        translatedJSONString = await translateWithQwen(jsonText, retryLimit, signal, langName);
     } else {
         translatedJSONString = await translateWithGemini(jsonText, retryLimit, signal, langName);
     }
@@ -973,6 +983,57 @@ async function translateWithOpenAICompatible(text, retryLimit, signal, targetLan
         if (!responseText) throw new Error(errorMessages.emptyResponse);
         return responseText;
     }, retryLimit, signal);
+}
+
+async function translateWithQwen(text, retryLimit, signal, targetLanguage = 'English') {
+    const settings = await new Promise(resolve => chrome.storage.local.get(
+        ['qwenApiKey', 'qwenModel', 'qwenRegion', 'qwenBaseUrl', 'maxToken', 'timeout'], resolve));
+    if (!settings.qwenApiKey) throw new Error(errorMessages.apiKeyNotSet);
+    const region = settings.qwenRegion || 'mainland';
+    const defaultBaseUrl = region === 'international'
+        ? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1'
+        : 'https://dashscope.aliyuncs.com/compatible-mode/v1';
+    const baseUrl = (region === 'custom' ? settings.qwenBaseUrl : defaultBaseUrl).trim().replace(/\/$/, '');
+    if (!baseUrl) throw new Error(errorMessages.endpointNotSet);
+    const endpoint = /\/chat\/completions$/i.test(baseUrl) ? baseUrl : `${baseUrl}/chat/completions`;
+    let units;
+    try { units = JSON.parse(text); } catch (e) { throw new Error(errorMessages.jsonParseFailed); }
+    if (!units || typeof units !== 'object' || Array.isArray(units)) {
+        throw new Error(errorMessages.invalidRequest);
+    }
+
+    const translateUnit = async (sourceText) => {
+        const requestBody = {
+            model: (settings.qwenModel || DEFAULTS.qwenModel).trim() || DEFAULTS.qwenModel,
+            messages: [{ role: 'user', content: String(sourceText) }],
+            translation_options: { source_lang: 'auto', target_lang: targetLanguage },
+            max_tokens: Math.min(Math.max(Number(settings.maxToken) || DEFAULTS.maxToken, 1), 32768)
+        };
+        return performTranslation(async () => {
+            const response = await fetchWithTimeout(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${settings.qwenApiKey}` },
+                body: JSON.stringify(requestBody), signal
+            }, settings.timeout || DEFAULTS.timeout);
+            let data;
+            try { data = await response.json(); } catch (e) { data = null; }
+            if (!response.ok) handleOpenAIHttpError(response, data);
+            const choice = data?.choices?.[0];
+            if (!choice) throw new Error(`${errorMessages.unknownError} (no choices)`);
+            if (choice.finish_reason === 'length') throw new Error(errorMessages.maxTokensError);
+            const responseText = choice.message?.content || '';
+            if (!responseText) throw new Error(errorMessages.emptyResponse);
+            return responseText;
+        }, retryLimit, signal);
+    };
+
+    const translatedUnits = {};
+    for (const [key, value] of Object.entries(units)) {
+        debugLog('Qwen translating unit', { key, characters: String(value).length, targetLanguage });
+        translatedUnits[key] = await translateUnit(value);
+        debugLog('Qwen unit complete', { key });
+    }
+    return JSON.stringify(translatedUnits);
 }
 
 async function translateWithAnthropic(text, retryLimit, signal, targetLanguage = 'English') {

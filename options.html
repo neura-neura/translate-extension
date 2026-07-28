@@ -44,12 +44,25 @@
             <option value="gemini">Google (Gemini)</option>
             <option value="openai">OpenAI (ChatGPT)</option>
             <option value="anthropic">Anthropic (Claude)</option>
+            <option value="qwen">Qwen (DashScope)</option>
             <option value="openai-compatible">OpenAI Compatible</option>
           </select>
         </div>
         <div class="form-group" id="endpointGroup" style="display:none">
           <label for="endpointUrl"><span data-i18n="endpointLabel">Endpoint URL</span><span class="help-icon" tabindex="0" role="img" aria-label="help" data-i18n-tip="tip_endpointUrl"></span></label>
           <input type="text" id="endpointUrl" placeholder="https://api.example.com/v1/chat/completions" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="form-group" id="qwenRegionGroup" style="display:none">
+          <label for="qwenRegion"><span data-i18n="qwenRegionLabel">Qwen service region</span></label>
+          <select id="qwenRegion">
+            <option value="mainland">Mainland China</option>
+            <option value="international">International</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+        <div class="form-group" id="qwenBaseUrlGroup" style="display:none">
+          <label for="qwenBaseUrl"><span data-i18n="qwenBaseUrlLabel">Qwen Base URL</span></label>
+          <input type="text" id="qwenBaseUrl" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" autocomplete="off" spellcheck="false">
         </div>
         <div class="form-group">
           <label for="apiKey"><span data-i18n="apiKeyLabel">API Key</span><span class="help-icon" tabindex="0" role="img" aria-label="help" data-i18n-tip="tip_apiKey"></span></label>
@@ -140,8 +153,13 @@
           <span class="toggle-switch" aria-hidden="true"></span>
         </label>
         <label class="toggle-group" for="autoRetranslateDomain">
-          <span><span data-i18n="autoRetranslateDomainLabel">Auto re-translate within domain</span><span class="help-icon" tabindex="0" role="img" aria-label="help" data-i18n-tip="tip_autoRetranslateDomain"></span></span>
+          <span><span data-i18n="autoRetranslateDomainLabel">Auto-translate known sites on reload</span><span class="help-icon" tabindex="0" role="img" aria-label="help" data-i18n-tip="tip_autoRetranslateDomain"></span></span>
           <input type="checkbox" id="autoRetranslateDomain">
+          <span class="toggle-switch" aria-hidden="true"></span>
+        </label>
+        <label class="toggle-group" for="debugLogging">
+          <span><span data-i18n="debugLoggingLabel">Enable debug logging</span><span class="help-icon" tabindex="0" role="img" aria-label="help" data-i18n-tip="tip_debugLogging"></span></span>
+          <input type="checkbox" id="debugLogging">
           <span class="toggle-switch" aria-hidden="true"></span>
         </label>
       </div>

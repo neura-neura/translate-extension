@@ -75,6 +75,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 translateBtn.disabled = false;
             }
         } catch (error) {
+            console.error('[AI Translator] Popup could not start translation:', error);
             setStatus(t.connectionError, 'error');
             translateBtn.disabled = false;
         }

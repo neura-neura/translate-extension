@@ -461,6 +461,26 @@
     let translationStarted = false;
     let translationCancelled = false;
     let translationHasError = false;
+    let debugLogging = false;
+
+    function contentDebugLog(...args) {
+        if (debugLogging) console.debug('[AI Translator]', ...args);
+    }
+
+    // A page can outlive the extension service worker after an extension
+    // reload/update. Never let that rejected runtime message break translation.
+    function sendRuntimeMessage(message, callback) {
+        try {
+            const result = callback
+                ? chrome.runtime.sendMessage(message, callback)
+                : chrome.runtime.sendMessage(message);
+            if (result && typeof result.catch === 'function') result.catch(() => { });
+            return result;
+        } catch (error) {
+            contentDebugLog('Runtime message unavailable', message.action);
+            return null;
+        }
+    }
 
     let translationProgress = 0;
     let translatedUnitsCount = 0;
@@ -491,6 +511,7 @@
     let highlightTranslated = false;
     let lastFinishTime = 0;
     let postFinishScanCount = 0;
+    let unitCollectionRetryCount = 0;
     const POST_FINISH_MAX_SCANS = 1;
     const POST_FINISH_SCAN_DELAYS = [3000];
 
@@ -507,8 +528,10 @@
             postFinishScanCount = 0;
             const reloaded = isPageReloaded();
             chrome.storage.local.get(
-                ['targetLanguage', 'realTimeTranslation', 'excludeList', 'hidePromptAllSites', 'autoRetranslateDomain', 'toggleBlueBackground'],
+                ['targetLanguage', 'realTimeTranslation', 'excludeList', 'hidePromptAllSites', 'autoRetranslateDomain', 'toggleBlueBackground', 'debugLogging'],
                 async function (items) {
+                    debugLogging = items.debugLogging === true;
+                    contentDebugLog('Content script initialized', { url: location.href, reloaded, topFrame: IS_TOP_FRAME });
                     try { watchForNewContent(); } catch (e) { }
                     try { watchUserInteractions(); } catch (e) { }
                     try { watchSpaUrlChanges(); } catch (e) { }
@@ -519,6 +542,7 @@
                     applyStrings(chosenLang);
 
                     const isReactSpa = isLikelyReactApp();
+                    contentDebugLog('Page detection', { pageLang, chosenLang, isReactSpa });
                     if (reloaded) {
                         cacheRestoreMap = null;
                         cacheRestoreActive = false;
@@ -556,6 +580,11 @@
                     const isExcluded = excludeList.some(prefix => currentUrl.startsWith(prefix) || siteOrigin === prefix);
 
                     const autoRetranslateEnabled = items.autoRetranslateDomain !== false;
+                    contentDebugLog('Auto-translation settings', {
+                        realTimeTranslation: items.realTimeTranslation === true,
+                        autoRetranslateDomain: autoRetranslateEnabled,
+                        excluded: isExcluded
+                    });
 
                     const beginAutoTranslation = () => {
                         if (isExcluded) return;
@@ -564,7 +593,7 @@
                         setTimeout(translationStarter, 1500);
                     };
 
-                    if (items.realTimeTranslation === true && !isReactSpa) {
+                    if (items.realTimeTranslation === true && !isReactSpa && (!reloaded || autoRetranslateEnabled)) {
                         beginAutoTranslation();
                         return;
                     }
@@ -592,7 +621,10 @@
                     }
                 }
             );
-        } catch (error) { }
+        } catch (error) {
+            contentDebugLog('Initialization failed', error);
+            console.error('[AI Translator] Initialization failed:', error);
+        }
     }
 
     function querySessionDomainKnown(callback) {
@@ -606,7 +638,7 @@
 
     function rememberTranslatedDomain() {
         try {
-            chrome.runtime.sendMessage({ action: 'sessionMarkTranslated' }).catch(() => { });
+            sendRuntimeMessage({ action: 'sessionMarkTranslated' });
         } catch (e) { }
     }
 
@@ -1023,7 +1055,7 @@
             translationStarted = true;
             rememberTranslatedDomain();
             startTranslation();
-            try { chrome.runtime.sendMessage({ action: 'startTranslationAllFrames' }).catch(() => { }); } catch (e) { }
+            sendRuntimeMessage({ action: 'startTranslationAllFrames' });
         });
         noButton.addEventListener('click', function () { removePrompt(); });
         neverButton.addEventListener('click', function () {
@@ -1324,16 +1356,31 @@
         let lang = 'en';
         try {
             const config = await new Promise(resolve => {
-                chrome.storage.local.get(['targetLanguage', 'showProgressPopup', 'batchSize', 'maxToken', 'toggleBlueBackground'], resolve);
+                chrome.storage.local.get(['targetLanguage', 'showProgressPopup', 'batchSize', 'maxToken', 'toggleBlueBackground', 'apiProvider'], resolve);
             });
             lang = config.targetLanguage || 'en';
             highlightTranslated = config.toggleBlueBackground === true;
             applyStrings(lang);
 
             const allTus = collectTranslationUnits();
+            contentDebugLog('Collected translation units', { count: allTus.length, provider: config.apiProvider });
             if (allTus.length === 0) {
+                // Mastodon and other SPAs may mount the visible content after
+                // the content script starts. Do not report success while the
+                // page is still rendering; retry for a short bounded window.
+                if (unitCollectionRetryCount < 10 && !translationCancelled) {
+                    unitCollectionRetryCount++;
+                    contentDebugLog('No units yet; waiting for dynamic page content', { retry: unitCollectionRetryCount });
+                    isTranslating = false;
+                    setTimeout(() => {
+                        if (translationStarted && !isTranslating && !translationCancelled) startTranslation();
+                    }, 500);
+                    return;
+                }
+                unitCollectionRetryCount = 0;
+                contentDebugLog('No translatable units found', { url: location.href });
                 isTranslating = false;
-                chrome.runtime.sendMessage({ action: "translationComplete", message: st.noTextFound }).catch(() => { });
+                sendRuntimeMessage({ action: "translationComplete", message: st.noTextFound });
                 return;
             }
 
@@ -1341,13 +1388,18 @@
             const tus = allTus.filter(tu => tu.template.length <= maxBatchLength);
             if (tus.length === 0) {
                 isTranslating = false;
-                chrome.runtime.sendMessage({ action: "translationComplete", message: st.noTextFound }).catch(() => { });
+                sendRuntimeMessage({ action: "translationComplete", message: st.noTextFound });
                 return;
             }
             expectedTotalUnits = tus.length;
+            unitCollectionRetryCount = 0;
 
-            const batches = createBatches(tus, config.batchSize || DEFAULTS.batchSize, maxBatchLength);
+            // Qwen-MT translates one unit per API call. Individual batches make
+            // the visible progress advance as each unit completes.
+            const effectiveBatchSize = config.apiProvider === 'qwen' ? 1 : (config.batchSize || DEFAULTS.batchSize);
+            const batches = createBatches(tus, effectiveBatchSize, maxBatchLength);
             totalBatches = batches.length;
+            contentDebugLog('Translation started', { units: expectedTotalUnits, batches: totalBatches, batchSize: effectiveBatchSize });
 
             for (const tu of tus) {
                 if (tu.block && tu.block.isConnected) {
@@ -1374,14 +1426,12 @@
                         }
                     })
                     .catch(error => {
+                        contentDebugLog('Batch failed', error);
                         const msg = error?.message || '';
                         if (msg.includes(st.translationCancelled)) return;
                         if (!translationCancelled && !translationHasError) {
                             translationHasError = true;
-                            try {
-                                chrome.runtime.sendMessage({ action: "cancelTranslation" })
-                                    ?.catch?.(() => { });
-                            } catch (e) { }
+                            sendRuntimeMessage({ action: "cancelTranslation" });
                             throw error;
                         }
                     })
@@ -1412,6 +1462,7 @@
                 finishTranslation();
             }
         } catch (error) {
+            contentDebugLog('Translation failed', error);
             if (!translationCancelled) handleTranslationError(error, lang);
         } finally {
             isTranslating = false;
@@ -1450,12 +1501,13 @@
                     for (const translated of translatedBatch) {
                         const tu = translationUnits.get(translated.id);
                         if (tu && tu.block && tu.block.isConnected) {
-                            applyTranslation(tu, translated.translatedTemplate);
-                            appliedCount++;
+                            if (applyTranslation(tu, translated.translatedTemplate)) appliedCount++;
+                            else skippedCount++;
                         } else {
                             skippedCount++;
                         }
                     }
+                    contentDebugLog('Applied translation batch', { applied: appliedCount, skipped: skippedCount });
                     restoreScrollAnchor(scrollAnchor);
                 }
                 await new Promise(resolve => requestAnimationFrame(resolve));
@@ -1515,7 +1567,7 @@
             progressInterval = null;
         }
         cleanupProcessingMarkers();
-        chrome.runtime.sendMessage({ action: "translationError", error: errorMessage }).catch(() => { });
+        sendRuntimeMessage({ action: "translationError", error: errorMessage });
     }
 
     function cleanupProcessingMarkers() {
@@ -1557,7 +1609,7 @@
             optionsLink.type = 'button';
             optionsLink.textContent = st.openOptions;
             optionsLink.addEventListener('click', () => {
-                try { chrome.runtime.sendMessage({ action: 'openOptionsPage' }).catch(() => { }); } catch (e) { }
+                sendRuntimeMessage({ action: 'openOptionsPage' });
             });
             panel.appendChild(optionsLink);
         }
@@ -1604,7 +1656,7 @@
             }
         }
         cleanupProcessingMarkers();
-        chrome.runtime.sendMessage({ action: "translationCancelled" }).catch(() => { });
+        sendRuntimeMessage({ action: "translationCancelled" });
     }
 
     function findBlockAncestor(node) {
@@ -1742,6 +1794,25 @@
             }
         }
 
+        // SPA fallback: Mastodon can mount the status after the first tree
+        // walk, and its visible post text lives in .status__content__text.
+        // Scan the concrete text containers once more so a late-mounted post
+        // is not reported as an empty page.
+        if (tus.length === 0 && document.body) {
+            const fallbackNodes = document.querySelectorAll('p, [lang], [class*="status__content__text"]');
+            for (const block of fallbackNodes) {
+                if (!block || !block.isConnected || !BLOCK_TAGS.has(block.nodeName)) continue;
+                if (isFullyExcluded(block)) continue;
+                const tu = buildTU(block);
+                if (tu && tu.hasTranslatableText) {
+                    tu.id = `tu_${tuIdCounter++}`;
+                    tus.push(tu);
+                    translationUnits.set(tu.id, tu);
+                }
+            }
+            if (tus.length > 0) contentDebugLog('Fallback text-container scan found units', { count: tus.length });
+        }
+
         return tus;
     }
 
@@ -1862,16 +1933,23 @@
     }
 
     function applyTranslation(tu, translatedTemplate, fromCacheRestore) {
-        if (!tu || !tu.block || !tu.block.isConnected) return;
+        if (!tu || !tu.block || !tu.block.isConnected) return false;
         if (shouldUseTextOnlyApply(tu.block)) {
-            if (applyTranslationInPlace(tu, translatedTemplate, fromCacheRestore)) return;
-            return;
+            if (applyTranslationInPlace(tu, translatedTemplate, fromCacheRestore)) return true;
+            // Some React/Mastodon containers contain nested inline elements and
+            // cannot be updated by the text-only path. Fall through to the
+            // placeholder-aware DOM replacement path instead of silently
+            // discarding a successful translation.
+            contentDebugLog('Text-only apply failed; using DOM fallback', { tag: tu.block.tagName });
         }
         try {
             try { tu.block.dataset.tuTranslatedTemplate = translatedTemplate; } catch (e) { }
             const normalized = normalizeTranslatedTemplate(translatedTemplate, tu.placeholders);
             const parsed = parseTemplateFragment(normalized);
-            if (!parsed) return;
+            if (!parsed) {
+                contentDebugLog('DOM fallback could not parse translated template', { tag: tu.block.tagName });
+                return false;
+            }
 
             const newChildren = [];
             for (const child of parsed.childNodes) {
@@ -1903,10 +1981,13 @@
                 tu.block.classList.remove('translated-text');
             }
             if (!fromCacheRestore) translatedUnitsCount++;
+            return true;
         } catch (e) {
+            contentDebugLog('DOM apply failed', e);
             if (tu.block && tu.block.dataset) {
                 delete tu.block.dataset.translationStatus;
             }
+            return false;
         }
     }
 
@@ -2322,7 +2403,7 @@
             const circleDiv = minimizedDiv.shadowRoot.querySelector('#minimizedProgressText');
             if (circleDiv) circleDiv.textContent = translationProgress.toFixed(0) + '%';
         }
-        chrome.runtime.sendMessage({
+        sendRuntimeMessage({
             action: "updateProgress",
             progress: translationProgress,
             stats: {
@@ -2367,7 +2448,7 @@
                 closeButton.style.display = 'block';
             }
         }
-        chrome.runtime.sendMessage({ action: "translationComplete", message: st.translationCompleted }).catch(() => { });
+        sendRuntimeMessage({ action: "translationComplete", message: st.translationCompleted });
         saveCurrentTranslationToCache().catch(() => { });
         setTimeout(() => { if (!isTranslating) removeStatusIndicator(); }, 3000);
         schedulePostFinishScans();
@@ -2415,6 +2496,7 @@
                         });
                         return false;
                     case "startTranslationFromPopup":
+                        contentDebugLog('Manual translation requested from popup');
                         if (isTranslating) {
                             sendResponse({ status: "alreadyTranslating" });
                             return false;

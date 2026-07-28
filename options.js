@@ -3,6 +3,9 @@ const DEFAULTS = Object.freeze({
     geminiModel: 'gemini-3.1-flash-lite',
     openaiModel: 'gpt-5.4-nano-2026-03-17',
     anthropicModel: 'claude-haiku-4-5-20251001',
+    qwenModel: 'qwen-mt-plus',
+    qwenRegion: 'mainland',
+    qwenBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     compatibleModel: '',
     batchSize: 500,
     maxBatchLength: 65535,
@@ -17,6 +20,7 @@ const MODEL_PLACEHOLDERS = {
     gemini: 'gemini-3.1-flash-lite',
     openai: 'gpt-5.4-nano-2026-03-17',
     anthropic: 'claude-haiku-4-5-20251001',
+    qwen: 'qwen-mt-plus',
     'openai-compatible': ''
 };
 
@@ -24,6 +28,7 @@ const providerSettings = {
     gemini: { apiKey: '', model: DEFAULTS.geminiModel },
     openai: { apiKey: '', model: DEFAULTS.openaiModel },
     anthropic: { apiKey: '', model: DEFAULTS.anthropicModel },
+    qwen: { apiKey: '', model: DEFAULTS.qwenModel, region: DEFAULTS.qwenRegion, baseUrl: DEFAULTS.qwenBaseUrl },
     'openai-compatible': { apiKey: '', model: DEFAULTS.compatibleModel, endpoint: '' }
 };
 
@@ -65,6 +70,13 @@ function updateProviderUI(provider) {
     } else {
         endpointGroup.style.display = 'none';
     }
+    const isQwen = provider === 'qwen';
+    document.getElementById('qwenRegionGroup').style.display = isQwen ? '' : 'none';
+    document.getElementById('qwenBaseUrlGroup').style.display = isQwen && settings.region === 'custom' ? '' : 'none';
+    if (isQwen) {
+        document.getElementById('qwenRegion').value = settings.region || DEFAULTS.qwenRegion;
+        document.getElementById('qwenBaseUrl').value = settings.baseUrl || DEFAULTS.qwenBaseUrl;
+    }
 }
 
 function saveCurrentProviderToMemory() {
@@ -75,6 +87,10 @@ function saveCurrentProviderToMemory() {
     if (currentProvider === 'openai-compatible') {
         settings.endpoint = document.getElementById('endpointUrl').value;
     }
+    if (currentProvider === 'qwen') {
+        settings.region = document.getElementById('qwenRegion').value;
+        settings.baseUrl = document.getElementById('qwenBaseUrl').value;
+    }
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -84,10 +100,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             'geminiApiKey', 'geminiModel',
             'openaiApiKey', 'openaiModel',
             'anthropicApiKey', 'anthropicModel',
+            'qwenApiKey', 'qwenModel', 'qwenRegion', 'qwenBaseUrl',
             'compatibleApiKey', 'compatibleModel', 'compatibleEndpoint',
             'delayBetweenRequests', 'maxToken', 'concurrencyLimit',
             'maxRetries', 'timeout',
-            'toggleBlueBackground', 'realTimeTranslation', 'showProgressPopup', 'excludeList', 'hidePromptAllSites', 'showContextMenu', 'autoRetranslateDomain'
+            'toggleBlueBackground', 'realTimeTranslation', 'showProgressPopup', 'excludeList', 'hidePromptAllSites', 'showContextMenu', 'autoRetranslateDomain', 'debugLogging'
         ]);
 
         const lang = items.targetLanguage || 'en';
@@ -100,6 +117,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         providerSettings.openai.model = items.openaiModel || DEFAULTS.openaiModel;
         providerSettings.anthropic.apiKey = items.anthropicApiKey || '';
         providerSettings.anthropic.model = items.anthropicModel || DEFAULTS.anthropicModel;
+        providerSettings.qwen.apiKey = items.qwenApiKey || '';
+        providerSettings.qwen.model = items.qwenModel || DEFAULTS.qwenModel;
+        providerSettings.qwen.region = items.qwenRegion || DEFAULTS.qwenRegion;
+        providerSettings.qwen.baseUrl = items.qwenBaseUrl || DEFAULTS.qwenBaseUrl;
         providerSettings['openai-compatible'].apiKey = items.compatibleApiKey || '';
         providerSettings['openai-compatible'].model = items.compatibleModel || DEFAULTS.compatibleModel;
         providerSettings['openai-compatible'].endpoint = items.compatibleEndpoint || '';
@@ -119,6 +140,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.getElementById('hidePromptAllSites').checked = items.hidePromptAllSites === true;
         document.getElementById('showContextMenu').checked = items.showContextMenu !== false;
         document.getElementById('autoRetranslateDomain').checked = items.autoRetranslateDomain !== false;
+        document.getElementById('debugLogging').checked = items.debugLogging === true;
         document.getElementById('excludeList').value = (items.excludeList && Array.isArray(items.excludeList)) ? items.excludeList.join('\n') : '';
     } catch (error) {
         console.error('Error loading settings:', error);
@@ -136,6 +158,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             providerSettings.gemini = { apiKey: '', model: DEFAULTS.geminiModel };
             providerSettings.openai = { apiKey: '', model: DEFAULTS.openaiModel };
             providerSettings.anthropic = { apiKey: '', model: DEFAULTS.anthropicModel };
+            providerSettings.qwen = { apiKey: '', model: DEFAULTS.qwenModel, region: DEFAULTS.qwenRegion, baseUrl: DEFAULTS.qwenBaseUrl };
             providerSettings['openai-compatible'] = { apiKey: '', model: DEFAULTS.compatibleModel, endpoint: '' };
             currentProvider = DEFAULTS.apiProvider;
             document.getElementById('apiProvider').value = currentProvider;
@@ -157,6 +180,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             document.getElementById('hidePromptAllSites').checked = false;
             document.getElementById('showContextMenu').checked = true;
             document.getElementById('autoRetranslateDomain').checked = true;
+            document.getElementById('debugLogging').checked = false;
         },
         exclude: () => {
             document.getElementById('excludeList').value = '';
@@ -186,6 +210,13 @@ document.getElementById('apiProvider').addEventListener('change', () => {
     saveCurrentProviderToMemory();
     currentProvider = document.getElementById('apiProvider').value;
     updateProviderUI(currentProvider);
+});
+
+document.getElementById('qwenRegion').addEventListener('change', () => {
+    const region = document.getElementById('qwenRegion').value;
+    if (region === 'mainland') document.getElementById('qwenBaseUrl').value = DEFAULTS.qwenBaseUrl;
+    if (region === 'international') document.getElementById('qwenBaseUrl').value = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
+    document.getElementById('qwenBaseUrlGroup').style.display = region === 'custom' ? '' : 'none';
 });
 
 document.getElementById('saveBtn').addEventListener('click', async () => {
@@ -219,6 +250,7 @@ document.getElementById('saveBtn').addEventListener('click', async () => {
     const hidePromptAllSites = document.getElementById('hidePromptAllSites').checked;
     const showContextMenu = document.getElementById('showContextMenu').checked;
     const autoRetranslateDomain = document.getElementById('autoRetranslateDomain').checked;
+    const debugLogging = document.getElementById('debugLogging').checked;
     const excludeList = document.getElementById('excludeList').value.split(/\r?\n/).map(url => url.trim()).filter(url => url);
 
     const saveData = {
@@ -230,12 +262,16 @@ document.getElementById('saveBtn').addEventListener('click', async () => {
         openaiModel: providerSettings.openai.model.trim() || DEFAULTS.openaiModel,
         anthropicApiKey: providerSettings.anthropic.apiKey,
         anthropicModel: providerSettings.anthropic.model.trim() || DEFAULTS.anthropicModel,
+        qwenApiKey: providerSettings.qwen.apiKey,
+        qwenModel: providerSettings.qwen.model.trim() || DEFAULTS.qwenModel,
+        qwenRegion: providerSettings.qwen.region || DEFAULTS.qwenRegion,
+        qwenBaseUrl: providerSettings.qwen.baseUrl.trim() || DEFAULTS.qwenBaseUrl,
         compatibleApiKey: providerSettings['openai-compatible'].apiKey,
         compatibleModel: providerSettings['openai-compatible'].model.trim(),
         compatibleEndpoint: providerSettings['openai-compatible'].endpoint.trim(),
         delayBetweenRequests, maxToken,
         concurrencyLimit, maxRetries, timeout,
-        toggleBlueBackground, realTimeTranslation, showProgressPopup, hidePromptAllSites, showContextMenu, autoRetranslateDomain, excludeList
+        toggleBlueBackground, realTimeTranslation, showProgressPopup, hidePromptAllSites, showContextMenu, autoRetranslateDomain, debugLogging, excludeList
     };
 
     try {
