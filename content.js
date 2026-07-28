@@ -489,6 +489,7 @@
     let batchesProcessed = 0;
 
     let translationUnits = new Map();
+    const translatedTemplateKeys = new Set();
     let activeObservers = [];
     let observedRoots = new WeakSet();
     let observerDebounceTimer = null;
@@ -956,6 +957,7 @@
         clearTimeout(userInteractionTimer);
         pendingRetranslation = false;
         try { translationUnits.clear(); } catch (e) { }
+        translatedTemplateKeys.clear();
         domUpdateQueue = [];
     }
 
@@ -1385,10 +1387,15 @@
             }
 
             const maxBatchLength = Math.min(Math.floor((config.maxToken || DEFAULTS.maxToken) * 3), DEFAULTS.maxBatchLength);
-            const tus = allTus.filter(tu => tu.template.length <= maxBatchLength);
+            const tus = allTus.filter(tu =>
+                tu.template.length <= maxBatchLength && !translatedTemplateKeys.has(tu.template)
+            );
+            for (const tu of allTus) {
+                if (!tus.includes(tu)) translationUnits.delete(tu.id);
+            }
             if (tus.length === 0) {
+                contentDebugLog('Skipping translation: all collected units were already translated');
                 isTranslating = false;
-                sendRuntimeMessage({ action: "translationComplete", message: st.noTextFound });
                 return;
             }
             expectedTotalUnits = tus.length;
@@ -1981,6 +1988,7 @@
                 tu.block.classList.remove('translated-text');
             }
             if (!fromCacheRestore) translatedUnitsCount++;
+            translatedTemplateKeys.add(tu.template);
             return true;
         } catch (e) {
             contentDebugLog('DOM apply failed', e);
@@ -2056,6 +2064,7 @@
             if (highlightTranslated) tu.block.classList.add('translated-text');
             else tu.block.classList.remove('translated-text');
             if (!fromCacheRestore) translatedUnitsCount++;
+            translatedTemplateKeys.add(tu.template);
             return true;
         } catch (e) {
             try { tu.block.dataset.translationStatus = 'failed'; } catch (_) { }
